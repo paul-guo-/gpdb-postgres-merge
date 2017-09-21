@@ -1206,7 +1206,7 @@ jobs:
     file: gpdb_src/concourse/tasks/ic_gpdb.yml
     image: centos-gpdb-dev-6
     params:
-      MAKE_TEST_COMMAND: PGOPTIONS='-c optimizer=off' installcheck-world
+      MAKE_TEST_COMMAND: -k PGOPTIONS='-c optimizer=off' installcheck-world
       TEST_OS: centos
       TEST_BINARY_SWAP: false
       CONFIGURE_FLAGS: {{configure_flags}}
@@ -1225,7 +1225,7 @@ jobs:
     file: gpdb_src/concourse/tasks/ic_gpdb.yml
     image: centos-gpdb-dev-6
     params:
-      MAKE_TEST_COMMAND: PGOPTIONS='-c optimizer=on' installcheck-world
+      MAKE_TEST_COMMAND: -k PGOPTIONS='-c optimizer=on' installcheck-world
       TEST_OS: centos
       CONFIGURE_FLAGS: {{configure_flags}}
 
@@ -1243,7 +1243,7 @@ jobs:
     file: gpdb_src/concourse/tasks/ic_gpdb.yml
     image: centos-gpdb-dev-6
     params:
-      MAKE_TEST_COMMAND: PGOPTIONS='-c optimizer=on' installcheck-world
+      MAKE_TEST_COMMAND: -k PGOPTIONS='-c optimizer=on' installcheck-world
       BLDWRAP_POSTGRES_CONF_ADDONS: optimizer_use_gpdb_allocators=on
       TEST_OS: centos
       CONFIGURE_FLAGS: {{configure_flags}}
@@ -1262,7 +1262,7 @@ jobs:
     file: gpdb_src/concourse/tasks/ic_gpdb.yml
     image: centos-gpdb-dev-6
     params:
-      MAKE_TEST_COMMAND: PGOPTIONS='-c gp_interconnect_type=tcp -c optimizer=off' installcheck-world
+      MAKE_TEST_COMMAND: -k PGOPTIONS='-c gp_interconnect_type=tcp -c optimizer=off' installcheck-world
       TEST_OS: centos
 
 - name: QP_memory-accounting
@@ -1280,7 +1280,7 @@ jobs:
     file: gpdb_src/concourse/tasks/tinc_gpdb.yml
     image: centos-gpdb-dev-6
     params:
-      MAKE_TEST_COMMAND: memory_accounting
+      MAKE_TEST_COMMAND: -k memory_accounting
       TEST_OS: "centos"
       CONFIGURE_FLAGS: {{configure_flags}}
 
@@ -1300,7 +1300,7 @@ jobs:
     file: gpdb_src/concourse/tasks/ic_gpdb.yml
     image: centos-gpdb-dev-7
     params:
-      MAKE_TEST_COMMAND: PGOPTIONS='-c optimizer=on' installcheck-world
+      MAKE_TEST_COMMAND: -k PGOPTIONS='-c optimizer=on' installcheck-world
       TEST_OS: centos
       CONFIGURE_FLAGS: {{configure_flags}}
 
@@ -1318,7 +1318,7 @@ jobs:
   - task: ic_gpdb
     file: gpdb_src/concourse/tasks/ic_gpdb_sles11.yml
     params:
-      MAKE_TEST_COMMAND: PGOPTIONS='-c optimizer=on' installcheck-world
+      MAKE_TEST_COMMAND: -k PGOPTIONS='-c optimizer=on' installcheck-world
       TEST_OS: sles
       CONFIGURE_FLAGS: {{configure_flags}}
 
@@ -1359,7 +1359,7 @@ jobs:
     file: gpdb_src/concourse/tasks/ic_gpdb_sles12.yml
     image: centos-gpdb-dev-6
     params:
-      MAKE_TEST_COMMAND: PGOPTIONS='-c optimizer=on' installcheck-world
+      MAKE_TEST_COMMAND: -k PGOPTIONS='-c optimizer=on' installcheck-world
       TEST_OS: sles12
     on_success:
       <<: *ccp_destroy
@@ -1403,7 +1403,7 @@ jobs:
     file: gpdb_src/concourse/tasks/ic_gpdb_sles12.yml
     image: centos-gpdb-dev-6
     params:
-      MAKE_TEST_COMMAND: PGOPTIONS='-c optimizer=off' installcheck-world
+      MAKE_TEST_COMMAND: -k PGOPTIONS='-c optimizer=off' installcheck-world
       TEST_OS: sles12
     on_success:
       <<: *ccp_destroy
@@ -1425,7 +1425,7 @@ jobs:
     file: gpdb_src/concourse/tasks/ic_gpdb_ubuntu.yml
     image: ubuntu-gpdb-dev-16
     params:
-      MAKE_TEST_COMMAND: PGOPTIONS='-c optimizer=off' installcheck-world
+      MAKE_TEST_COMMAND: -k PGOPTIONS='-c optimizer=off' installcheck-world
       CONFIGURE_FLAGS: {{configure_flags}}
 
 - name: icw_gporca_conan_ubuntu16
@@ -1710,7 +1710,7 @@ jobs:
     - task: storage_tests
       file: gpdb_src/concourse/tasks/tinc_gpdb.yml
       params:
-        MAKE_TEST_COMMAND: storage
+        MAKE_TEST_COMMAND: -k storage
         TEST_OS: centos
         CONFIGURE_FLAGS: {{configure_flags}}
       image: centos-gpdb-dev-6
@@ -1718,7 +1718,7 @@ jobs:
     - task: storage_vacuum_xidlimits
       file: gpdb_src/concourse/tasks/tinc_gpdb.yml
       params:
-        MAKE_TEST_COMMAND: storage_vacuum_xidlimits
+        MAKE_TEST_COMMAND: -k storage_vacuum_xidlimits
         TEST_OS: centos
         CONFIGURE_FLAGS: {{configure_flags}}
       image: centos-gpdb-dev-6
@@ -1738,7 +1738,7 @@ jobs:
     file: gpdb_src/concourse/tasks/ic_gpdb.yml
     image: centos-gpdb-dev-6
     params:
-      MAKE_TEST_COMMAND: "-C src/test/regress && make -C src/test/walrep install installcheck"
+      MAKE_TEST_COMMAND: "-k -C src/test/regress && make -k -C src/test/walrep install installcheck"
       TEST_OS: centos
       CONFIGURE_FLAGS: {{configure_flags}}
       WITH_MIRRORS: false
