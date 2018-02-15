@@ -611,6 +611,7 @@ ccp_vars_anchor: &ccp_default_vars
   aws_instance-node-instance_type: t2.medium
   aws_ebs_volume_type: standard
   platform: centos6
+  ccp_reap_minutes: 10 # we fail a lot in this pipeline
 
 ccp_destroy_anchor: &ccp_destroy
   put: terraform
