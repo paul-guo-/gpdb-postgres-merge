@@ -19,12 +19,14 @@
 #include "access/xact.h"
 #include "catalog/catalog.h"
 #include "catalog/indexing.h"
+#include "catalog/oid_dispatch.h"
 #include "catalog/namespace.h"
 #include "commands/cluster.h"
 #include "commands/matview.h"
 #include "commands/tablecmds.h"
 #include "executor/executor.h"
 #include "miscadmin.h"
+#include "postmaster/autostats.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/smgr.h"
 #include "tcop/tcopprot.h"
@@ -32,11 +34,14 @@
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
+//#include "cdb/cdbdisp_query.h"
+#include "cdb/cdbvars.h"
 
 typedef struct
 {
 	DestReceiver pub;			/* publicly-known function pointers */
 	Oid			transientoid;	/* OID of new heap into which to store */
+	Oid			matviewOid;		/* OID of old heap into which to store */
 	/* These fields are filled by transientrel_startup: */
 	Relation	transientrel;	/* relation to write to */
 	CommandId	output_cid;		/* cmin to insert in output tuples */
@@ -44,12 +49,13 @@ typedef struct
 	BulkInsertState bistate;	/* bulk insert state */
 } DR_transientrel;
 
+static void ExecRefreshMatView_finish(DestReceiver *self);
 static void transientrel_startup(DestReceiver *self, int operation, TupleDesc typeinfo);
 static void transientrel_receive(TupleTableSlot *slot, DestReceiver *self);
 static void transientrel_shutdown(DestReceiver *self);
 static void transientrel_destroy(DestReceiver *self);
 static void refresh_matview_datafill(DestReceiver *dest, Query *query,
-						 const char *queryString);
+						 const char *queryString, RefreshMatViewStmt *stmt);
 
 /*
  * SetMatViewPopulatedState
@@ -112,10 +118,16 @@ SetMatViewPopulatedState(Relation relation, bool newstate)
  *
  * The matview's "populated" state is changed based on whether the contents
  * reflect the result set of the materialized view's query.
+ * GPDB:
+ * For QD we call it in ExecRefreshMatView() directly while for QE it is called
+ * in InitPlan() to do preparation and data filling via new created dest.
+ * We add a new parameter queryDesc here. For QD, it is not needed (NULL should
+ * be set) but for QE it is needed since dest will be stored in it.
  */
 void
-ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
-				   ParamListInfo params, char *completionTag)
+_ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
+				    ParamListInfo params, char *completionTag,
+					QueryDesc *queryDesc)
 {
 	Oid			matviewOid;
 	Relation	matviewRel;
@@ -201,13 +213,38 @@ ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 
 	/* Create the transient table that will receive the regenerated data. */
 	OIDNewHeap = make_new_heap(matviewOid, tableSpace, true /* GPDB_93_MERGE_FIXME Is true?*/);
-	dest = CreateTransientRelDestReceiver(OIDNewHeap);
 
-	/* Generate the data, if wanted. */
-	if (!stmt->skipData)
-		refresh_matview_datafill(dest, dataQuery, queryString);
+	dest = CreateTransientRelDestReceiver(OIDNewHeap, matviewOid);
 
-	heap_close(matviewRel, NoLock);
+ 	if (Gp_role == GP_ROLE_DISPATCH)
+	{
+		/* GPDB: We run it to dispatch the plan but without data filling when
+		 * !stmt->skipData else we need to dispatch the utility stmt.
+		 */
+#if 0
+		/* Generate the data, if wanted. */
+		if (!stmt->skipData)
+#endif
+			refresh_matview_datafill(dest, dataQuery, queryString, stmt);
+	}
+
+	heap_close(matviewRel, NoLock); /* Put in ExecRefreshMatView_finish()? */
+
+	if (queryDesc != NULL)
+		queryDesc->dest = dest;
+#if 0
+	/* We won't let dest rShutdown() for this case. */
+	if (stmt->skipData)
+		ExecRefreshMatView_finish(dest);
+#endif
+}
+
+static void
+ExecRefreshMatView_finish(DestReceiver *self)
+{
+	DR_transientrel *myState = (DR_transientrel *) self;
+	Oid			matviewOid = myState->matviewOid;
+	Oid			OIDNewHeap = myState->transientoid;
 
 	/*
 	 * Swap the physical files of the target and transient tables, then
@@ -219,16 +256,43 @@ ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 	RelationCacheInvalidateEntry(matviewOid);
 }
 
+void
+ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
+				   ParamListInfo params, char *completionTag)
+{
+	_ExecRefreshMatView(stmt, queryString, params, completionTag,
+							NULL /* QueryDesc * */);
+#if 0
+	/* No data filling, we need to dispatch the utility instead. */
+ 	if (Gp_role == GP_ROLE_DISPATCH && stmt->skipData)
+	{
+		/* No data filling, so just dispatch the utility simply. */
+		CdbDispatchUtilityStatement((Node *) stmt,
+									DF_CANCEL_ON_ERROR|
+									DF_WITH_SNAPSHOT|
+									DF_NEED_TWO_PHASE,
+									GetAssignedOidsForDispatch(),
+									NULL);
+	}
+#endif
+}
+
 /*
  * refresh_matview_datafill
+ * GPDB: We add the stmt parameter since we want to dispatch it so that QE
+ * could set up dest based on that via calling _ExecRefreshMatView() directly
+ * in InitPlan() as mentioned before.
  */
 static void
 refresh_matview_datafill(DestReceiver *dest, Query *query,
-						 const char *queryString)
+						 const char *queryString, RefreshMatViewStmt *stmt)
 {
 	List	   *rewritten;
 	PlannedStmt *plan;
 	QueryDesc  *queryDesc;
+	ScanDirection dir;
+	Oid         relationOid = InvalidOid;   /* relation that is modified */
+	AutoStatsCmdType cmdType = AUTOSTATS_CMDTYPE_SENTINEL;  /* command type */
 
 	/* Rewrite, copying the given Query to make sure it's not changed */
 	rewritten = QueryRewrite((Query *) copyObject(query));
@@ -243,6 +307,9 @@ refresh_matview_datafill(DestReceiver *dest, Query *query,
 
 	/* Plan the query which will generate data for the refresh. */
 	plan = pg_plan_query(query, 0, NULL);
+
+	/* We need to dispatch RefreshMatView to set up dest on QEs. */
+	plan->RefreshMatView = stmt;
 
 	/*
 	 * Use a snapshot with an updated command ID to ensure this query sees
@@ -261,12 +328,29 @@ refresh_matview_datafill(DestReceiver *dest, Query *query,
 	/* call ExecutorStart to prepare the plan for execution */
 	ExecutorStart(queryDesc, EXEC_FLAG_WITHOUT_OIDS);
 
+	if (Gp_role == GP_ROLE_DISPATCH && !stmt->skipData)
+		autostats_get_cmdtype(queryDesc, &cmdType, &relationOid);
+
+	/*
+	 * Normally, we run the plan to completion; but if skipData is specified,
+	 * just do tuple receiver startup and shutdown.
+	 */
+	if (stmt->skipData)
+		dir = NoMovementScanDirection;
+	else
+		dir = ForwardScanDirection;
+
 	/* run the plan */
-	ExecutorRun(queryDesc, ForwardScanDirection, 0L);
+	ExecutorRun(queryDesc, dir, 0L);
+
+	dest->rDestroy(dest);
 
 	/* and clean up */
 	ExecutorFinish(queryDesc);
 	ExecutorEnd(queryDesc);
+
+	if (Gp_role == GP_ROLE_DISPATCH && !stmt->skipData)
+		auto_stats(cmdType, relationOid, queryDesc->es_processed, false /* inFunction */);
 
 	FreeQueryDesc(queryDesc);
 
@@ -274,7 +358,7 @@ refresh_matview_datafill(DestReceiver *dest, Query *query,
 }
 
 DestReceiver *
-CreateTransientRelDestReceiver(Oid transientoid)
+CreateTransientRelDestReceiver(Oid transientoid, Oid matviewOid)
 {
 	DR_transientrel *self = (DR_transientrel *) palloc0(sizeof(DR_transientrel));
 
@@ -284,6 +368,7 @@ CreateTransientRelDestReceiver(Oid transientoid)
 	self->pub.rDestroy = transientrel_destroy;
 	self->pub.mydest = DestTransientRel;
 	self->transientoid = transientoid;
+	self->matviewOid = matviewOid;
 
 	return (DestReceiver *) self;
 }
@@ -359,6 +444,9 @@ transientrel_shutdown(DestReceiver *self)
 
 	/* close transientrel, but keep lock until commit */
 	heap_close(myState->transientrel, NoLock);
+
+	ExecRefreshMatView_finish(self);
+
 	myState->transientrel = NULL;
 }
 

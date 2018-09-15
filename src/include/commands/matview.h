@@ -18,13 +18,17 @@
 #include "nodes/parsenodes.h"
 #include "tcop/dest.h"
 #include "utils/relcache.h"
+#include "executor/execdesc.h"
 
 
 extern void SetMatViewPopulatedState(Relation relation, bool newstate);
 
+extern void _ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
+				   ParamListInfo params, char *completionTag, QueryDesc *queryDesc);
+
 extern void ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 				   ParamListInfo params, char *completionTag);
 
-extern DestReceiver *CreateTransientRelDestReceiver(Oid oid);
+extern DestReceiver *CreateTransientRelDestReceiver(Oid oid, Oid oid2);
 
 #endif   /* MATVIEW_H */

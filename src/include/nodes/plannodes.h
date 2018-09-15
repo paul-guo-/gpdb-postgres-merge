@@ -20,6 +20,7 @@
 #include "access/sdir.h"
 #include "nodes/bitmapset.h"
 #include "nodes/primnodes.h"
+#include "nodes/parsenodes.h"
 
 typedef struct DirectDispatchInfo
 {
@@ -146,6 +147,12 @@ typedef struct PlannedStmt
 	 * to be dispatched to QEs.
 	 */
 	IntoClause *intoClause;
+
+	/*
+	 * GPDB: Used for RefreshMatViewStmt. It is dispatched to QEs
+	 * to set up target, and it is set in _ExecRefreshMatView().
+	 */
+	RefreshMatViewStmt *RefreshMatView;
 } PlannedStmt;
 
 /*

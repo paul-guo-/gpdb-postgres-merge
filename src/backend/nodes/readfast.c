@@ -2790,6 +2790,18 @@ _readDistributedBy(void)
 	READ_DONE();
 }
 
+static RefreshMatViewStmt*
+_readRefreshMatViewStmt(void)
+{
+	READ_LOCALS(RefreshMatViewStmt);
+
+	READ_BOOL_FIELD(skipData);
+	READ_NODE_FIELD(relation);
+
+	READ_DONE();
+}
+
+
 static AlterFdwStmt *
 _readAlterFdwStmt(void)
 {
@@ -3842,7 +3854,9 @@ readNodeBinary(void)
 			case T_DistributedBy:
 				return_value = _readDistributedBy();
 				break;
-
+			case T_RefreshMatViewStmt:
+				return_value = _readRefreshMatViewStmt();
+				break;
 
 			default:
 				return_value = NULL; /* keep the compiler silent */

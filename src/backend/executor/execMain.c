@@ -57,6 +57,7 @@
 #include "catalog/pg_type.h"
 #include "cdb/cdbpartition.h"
 #include "commands/createas.h"
+#include "commands/matview.h"
 #include "commands/tablecmds.h" /* XXX: temp for get_parts() */
 #include "commands/tablespace.h"
 #include "commands/trigger.h"
@@ -2081,24 +2082,31 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	queryDesc->tupDesc = tupType;
 
 	/*
-	 * GPDB: Hack for CTAS/MatView:
+	 * GPDB: Hack for CTAS/CreateMatView:
 	 *   Need to switch to IntoRelDest for CTAS.
 	 *   Also need to create tables in advance.
 	 */
 	if (queryDesc->plannedstmt->intoClause != NULL)
 		intorel_initplan(queryDesc, eflags);
 
+	/*
+	 * GPDB: Hack for RefreshMatView.
+	 * Need to switch to TransientRelDest and do something in advance.
+	 */
+	if (queryDesc->plannedstmt->RefreshMatView != NULL && Gp_role == GP_ROLE_EXECUTE)
+		_ExecRefreshMatView(queryDesc->plannedstmt->RefreshMatView, NULL, NULL, NULL, queryDesc);
+
 	if (DEBUG1 >= log_min_messages)
-			{
-				char		msec_str[32];
-				switch (check_log_duration(msec_str, false))
-				{
-					case 1:
-					case 2:
-						ereport(LOG, (errmsg("duration to InitPlan end: %s ms", msec_str)));
-						break;
-				}
-			}
+	{
+		char		msec_str[32];
+		switch (check_log_duration(msec_str, false))
+		{
+			case 1:
+			case 2:
+				ereport(LOG, (errmsg("duration to InitPlan end: %s ms", msec_str)));
+				break;
+		}
+	}
 }
 
 /*

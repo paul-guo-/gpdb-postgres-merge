@@ -1275,6 +1275,15 @@ _outGpPolicy(StringInfo str, GpPolicy *node)
 	WRITE_INT_ARRAY(attrs, node->nattrs, AttrNumber);
 }
 
+static void
+_outRefreshMatViewStmt(StringInfo str, RefreshMatViewStmt *node)
+{
+	WRITE_NODE_TYPE("REFRESHMATVIEWSTMT");
+
+	WRITE_BOOL_FIELD(skipData);
+	WRITE_NODE_FIELD(relation);
+}
+
 /*
  * _outNode -
  *	  converts a Node into binary string and append it to 'str'
@@ -2215,6 +2224,9 @@ _outNode(StringInfo str, void *obj)
 				break;
 			case T_DistributedBy:
 				_outDistributedBy(str, obj);
+				break;
+			case T_RefreshMatViewStmt:
+				_outRefreshMatViewStmt(str, obj);
 				break;
 			default:
 				elog(ERROR, "could not serialize unrecognized node type: %d",

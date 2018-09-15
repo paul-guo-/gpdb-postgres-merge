@@ -3218,6 +3218,8 @@ transformCreateTableAsStmt(ParseState *pstate, CreateTableAsStmt *stmt)
 		 * conveniently get it from.
 		 */
 		stmt->into->viewQuery = copyObject(query);
+
+		((Query*)stmt->into->viewQuery)->isCTAS = true;
 	}
 
 	/* represent the command as a utility Query */
