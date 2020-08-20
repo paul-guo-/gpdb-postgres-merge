@@ -5184,6 +5184,7 @@ BootStrapXLOG(void)
 	checkPoint.fullPageWrites = fullPageWrites;
 	checkPoint.nextFullXid =
 		FullTransactionIdFromEpochAndXid(0, FirstNormalTransactionId);
+	checkPoint.nextGxid =FirstDistributedTransactionId;
 	checkPoint.nextOid = FirstBootstrapObjectId;
 	checkPoint.nextRelfilenode = FirstBootstrapObjectId;
 	checkPoint.nextMulti = FirstMultiXactId;
@@ -6826,6 +6827,7 @@ StartupXLOG(void)
 
 	/* initialize shared memory variables from the checkpoint record */
 	ShmemVariableCache->nextFullXid = checkPoint.nextFullXid;
+	ShmemVariableCache->nextGxid = checkPoint.nextGxid;
 	ShmemVariableCache->nextOid = checkPoint.nextOid;
 	ShmemVariableCache->oidCount = 0;
 	ShmemVariableCache->nextRelfilenode = checkPoint.nextRelfilenode;
@@ -9109,6 +9111,10 @@ CreateCheckPoint(int flags)
 	checkPoint.oldestXidDB = ShmemVariableCache->oldestXidDB;
 	LWLockRelease(XidGenLock);
 
+	LWLockAcquire(GxidGenLock, LW_SHARED);
+	checkPoint.nextGxid = ShmemVariableCache->nextGxid;
+	LWLockRelease(GxidGenLock);
+
 	LWLockAcquire(CommitTsLock, LW_SHARED);
 	checkPoint.oldestCommitTsXid = ShmemVariableCache->oldestCommitTsXid;
 	checkPoint.newestCommitTsXid = ShmemVariableCache->newestCommitTsXid;
@@ -10083,6 +10089,9 @@ xlog_redo(XLogReaderState *record)
 		LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
 		ShmemVariableCache->nextFullXid = checkPoint.nextFullXid;
 		LWLockRelease(XidGenLock);
+		LWLockAcquire(GxidGenLock, LW_EXCLUSIVE);
+		ShmemVariableCache->nextGxid = checkPoint.nextGxid;
+		LWLockRelease(GxidGenLock);
 		LWLockAcquire(OidGenLock, LW_EXCLUSIVE);
 		ShmemVariableCache->nextOid = checkPoint.nextOid;
 		ShmemVariableCache->oidCount = 0;
@@ -10182,6 +10191,11 @@ xlog_redo(XLogReaderState *record)
 									  checkPoint.nextFullXid))
 			ShmemVariableCache->nextFullXid = checkPoint.nextFullXid;
 		LWLockRelease(XidGenLock);
+
+		LWLockAcquire(GxidGenLock, LW_EXCLUSIVE);
+		if (ShmemVariableCache->nextGxid < checkPoint.nextGxid)
+			ShmemVariableCache->nextGxid = checkPoint.nextGxid;
+		LWLockRelease(GxidGenLock);
 
 		/*
 		 * We ignore the nextOid counter in an ONLINE checkpoint, preferring

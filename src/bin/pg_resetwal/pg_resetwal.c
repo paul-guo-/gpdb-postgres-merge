@@ -517,7 +517,7 @@ main(int argc, char *argv[])
 		ControlFile.checkPointCopy.nextFullXid =
 			FullTransactionIdFromEpochAndXid(set_xid_epoch,
 											 XidFromFullTransactionId(ControlFile.checkPointCopy.nextFullXid));
-
+//TODO: need to modify in this utility
 	if (set_xid != 0)
 	{
 		ControlFile.checkPointCopy.nextFullXid =

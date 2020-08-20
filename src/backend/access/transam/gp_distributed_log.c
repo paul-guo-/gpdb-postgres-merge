@@ -93,7 +93,6 @@ gp_distributed_log(PG_FUNCTION_ARGS)
 		 */
 		while (true)
 		{
-			DistributedTransactionTimeStamp distribTimeStamp;
 			DistributedTransactionId 		distribXid;
 			char							distribId[TMGIDSIZE];
 			Datum		values[6];
@@ -106,7 +105,6 @@ gp_distributed_log(PG_FUNCTION_ARGS)
 
 			if (!DistributedLog_ScanForPrevCommitted(
 					&context->indexXid,
-					&distribTimeStamp,
 					&distribXid))
 				break;
 
@@ -120,7 +118,7 @@ gp_distributed_log(PG_FUNCTION_ARGS)
 			values[1] = Int16GetDatum((int16)GpIdentity.dbid);
 			values[2] = TransactionIdGetDatum(distribXid);
 
-			dtxFormGID(distribId, distribTimeStamp, distribXid);
+			dtxFormGID(distribId, distribXid);
 			values[3] = CStringGetTextDatum(distribId);
 
 			/*

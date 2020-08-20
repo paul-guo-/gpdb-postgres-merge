@@ -198,8 +198,6 @@ typedef struct TMGXACT_UTILITY_MODE_REDO
 
 typedef struct TMGXACT
 {
-	DistributedTransactionTimeStamp	distribTimeStamp;
-
 	/*
 	 * Like PGPROC->xid to local transaction, gxid is set if distributed
 	 * transaction needs two-phase, and it's reset when distributed
@@ -265,7 +263,6 @@ extern DtxContext DistributedTransactionContext;
 extern volatile bool *shmDtmStarted;
 extern volatile bool *shmCleanupBackends;
 extern volatile pid_t *shmDtxRecoveryPid;
-extern volatile DistributedTransactionTimeStamp *shmDistribTimeStamp;
 extern volatile DistributedTransactionId *shmGIDSeq;
 extern uint32 *shmNextSnapshotId;
 extern TMGXACT_LOG *shmCommittedGxactArray;
@@ -274,15 +271,11 @@ extern volatile int *shmNumCommittedGxacts;
 extern char *DtxStateToString(DtxState state);
 extern char *DtxProtocolCommandToString(DtxProtocolCommand command);
 extern char *DtxContextToString(DtxContext context);
-extern DistributedTransactionTimeStamp getDtmStartTime(void);
 extern void dtxCrackOpenGid(const char	*gid,
-							DistributedTransactionTimeStamp	*distribTimeStamp,
 							DistributedTransactionId		*distribXid);
 extern void dtxFormGID(char *gid,
-					   DistributedTransactionTimeStamp tstamp,
 					   DistributedTransactionId gxid);
 extern DistributedTransactionId getDistributedTransactionId(void);
-extern DistributedTransactionTimeStamp getDistributedTransactionTimestamp(void);
 extern bool getDistributedTransactionIdentifier(char *id);
 
 extern void resetGxact(void);

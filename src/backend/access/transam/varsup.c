@@ -301,6 +301,27 @@ ReadNextFullTransactionId(void)
 	return fullXid;
 }
 
+void
+AdvanceNextDistributedTransactionIdPastGxid(DistributedTransactionId gxid)
+{
+	DistributedTransactionId next_gxid;
+	/*
+	 * It is safe to read nextFullXid without a lock, because this is only
+	 * called from the startup process or single-process mode, meaning that no
+	 * other process can modify it.
+	 */
+	Assert(AmStartupProcess() || !IsUnderPostmaster);
+
+	/* Fast return if this isn't an xid high enough to move the needle. */
+	next_gxid = ShmemVariableCache->nextGxid;
+	if (gxid < next_gxid)
+		return;
+
+	LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
+	ShmemVariableCache->nextGxid = gxid++;
+	LWLockRelease(XidGenLock);
+}
+
 /*
  * Advance nextFullXid to the value after a given xid.  The epoch is inferred.
  * This must only be called during recovery or from two-phase start-up code.

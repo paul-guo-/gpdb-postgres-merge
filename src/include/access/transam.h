@@ -134,6 +134,8 @@ typedef struct VariableCacheData
 	 */
 	FullTransactionId nextFullXid;	/* next full XID to assign */
 
+	DistributedTransactionId nextGxid;	/* next full XID to assign */
+
 	TransactionId oldestXid;	/* cluster-wide minimum datfrozenxid */
 	TransactionId xidVacLimit;	/* start forcing autovacuums here */
 	TransactionId xidWarnLimit; /* start complaining here */
@@ -152,7 +154,7 @@ typedef struct VariableCacheData
 	 */
 	TransactionId latestCompletedXid;	/* newest XID that has committed or
 										 * aborted */
-	TransactionId latestCompletedDxid;	/* newest distributed XID that has
+	TransactionId latestCompletedGxid;	/* newest distributed XID that has
 										   committed or aborted */
 
 	/*
@@ -199,6 +201,7 @@ extern XLogRecPtr TransactionIdGetCommitLSN(TransactionId xid);
 
 /* in transam/varsup.c */
 extern FullTransactionId GetNewTransactionId(bool isSubXact);
+extern void AdvanceNextDistributedTransactionIdPastGxid(DistributedTransactionId gxid);
 extern void AdvanceNextFullTransactionIdPastXid(TransactionId xid);
 extern FullTransactionId ReadNextFullTransactionId(void);
 extern void SetTransactionIdLimit(TransactionId oldest_datfrozenxid,

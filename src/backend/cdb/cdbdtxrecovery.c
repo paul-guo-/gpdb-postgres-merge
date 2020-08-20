@@ -419,7 +419,6 @@ abortOrphanedTransactions(HTAB *htab)
 {
 	HASH_SEQ_STATUS status;
 	InDoubtDtx *entry = NULL;
-	DistributedTransactionTimeStamp	distribTimeStamp;
 	DistributedTransactionId	gxid;
 
 	if (htab == NULL)
@@ -431,9 +430,9 @@ abortOrphanedTransactions(HTAB *htab)
 	{
 		elog(DTM_DEBUG3, "Finding orphaned transactions with gid = %s", entry->gid);
 
-		dtxCrackOpenGid(entry->gid, &distribTimeStamp, &gxid);
+		dtxCrackOpenGid(entry->gid, &gxid);
 
-		if (!IsDtxInProgress(distribTimeStamp, gxid))
+		if (!IsDtxInProgress(gxid))
 		{
 			elog(LOG, "Aborting orphaned transactions with gid = %s", entry->gid);
 			doAbortInDoubt(entry->gid);
@@ -450,7 +449,7 @@ UtilityModeSaveRedo(bool committed, TMGXACT_LOG *gxact_log)
 	utilityModeRedo.committed = committed;
 	memcpy(&utilityModeRedo.gxact_log, gxact_log, sizeof(TMGXACT_LOG));
 
-	elog(DTM_DEBUG5, "Writing {committed = %s, gid = %s, gxid = %u} to DTM redo file",
+	elog(DTM_DEBUG5, "Writing {committed = %s, gid = %s, gxid = "UINT64_FORMAT"} to DTM redo file",
 		 (utilityModeRedo.committed ? "true" : "false"),
 		 utilityModeRedo.gxact_log.gid,
 		 utilityModeRedo.gxact_log.gxid);
@@ -507,7 +506,7 @@ ReplayRedoFromUtilityMode(void)
 					 errmsg("error reading DTM redo file: %m")));
 		}
 
-		elog(DTM_DEBUG5, "Read {committed = %s, gid = %s, gxid = %u} from DTM redo file",
+		elog(DTM_DEBUG5, "Read {committed = %s, gid = %s, gxid = "UINT64_FORMAT"} from DTM redo file",
 			 (utilityModeRedo.committed ? "true" : "false"),
 			 utilityModeRedo.gxact_log.gid,
 			 utilityModeRedo.gxact_log.gxid);

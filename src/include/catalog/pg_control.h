@@ -46,6 +46,7 @@ typedef struct CheckPoint
 								 * timeline (equals ThisTimeLineID otherwise) */
 	bool		fullPageWrites; /* current full_page_writes */
 	FullTransactionId nextFullXid;	/* next free full transaction ID */
+	DistributedTransactionId nextGxid;	/* next free gxid */
 	Oid			nextOid;		/* next free OID */
 	Oid			nextRelfilenode;	/* next free Relfilenode */
 	MultiXactId nextMulti;		/* next free MultiXactId */

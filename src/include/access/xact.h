@@ -354,7 +354,6 @@ typedef struct xl_xact_parsed_commit
 	XLogRecPtr	origin_lsn;
 	TimestampTz origin_timestamp;
 
-	DistributedTransactionTimeStamp distribTimeStamp;
 	DistributedTransactionId        distribXid;
 } xl_xact_parsed_commit;
 
