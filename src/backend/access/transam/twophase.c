@@ -179,6 +179,7 @@ typedef struct GlobalTransactionData
 	bool		ondisk;			/* true if prepare state file is on disk */
 	bool		inredo;			/* true if entry was added via xlog_redo */
 	char		gid[GIDSIZE];	/* The GID assigned to the prepared xact */
+	int			prep_xacts_no;	/* position in the prepXacts array */
 }			GlobalTransactionData;
 
 /*
@@ -206,6 +207,7 @@ static TwoPhaseStateData *TwoPhaseState;
  * (since it's just local memory).
  */
 static GlobalTransaction MyLockedGxact = NULL;
+static GlobalTransaction CachedGxact = NULL;
 
 static bool twophaseExitRegistered = false;
 
@@ -443,6 +445,7 @@ MarkAsPreparing(TransactionId xid,
 
 	/* And insert it into the active array */
 	Assert(TwoPhaseState->numPrepXacts < max_prepared_xacts);
+	gxact->prep_xacts_no = TwoPhaseState->numPrepXacts;
 	TwoPhaseState->prepXacts[TwoPhaseState->numPrepXacts++] = gxact;
 
 	LWLockRelease(TwoPhaseStateLock);
@@ -518,6 +521,8 @@ MarkAsPreparingGuts(GlobalTransaction gxact, TransactionId xid, const char *gid,
 	 * abort after this, we must release it.
 	 */
 	MyLockedGxact = gxact;
+
+	CachedGxact = gxact;
 }
 
 /*
@@ -586,6 +591,7 @@ static GlobalTransaction
 LockGXact(const char *gid, Oid user, bool raiseErrorIfNotFound)
 {
 	int			i;
+	GlobalTransaction hit_gxact;
 
 	elog((Debug_print_full_dtm ? LOG : DEBUG5),"LockGXact called to lock identifier = %s.",gid);
 	/* on first call, register the exit hook */
@@ -596,6 +602,14 @@ LockGXact(const char *gid, Oid user, bool raiseErrorIfNotFound)
 	}
 
 	LWLockAcquire(TwoPhaseStateLock, LW_EXCLUSIVE);
+
+	if (CachedGxact != NULL && strcmp(CachedGxact->gid, gid) == 0)
+	{
+		hit_gxact = CachedGxact;
+	}
+	else
+	{
+		hit_gxact = NULL;
 
 	for (i = 0; i < TwoPhaseState->numPrepXacts; i++)
 	{
@@ -635,15 +649,21 @@ LockGXact(const char *gid, Oid user, bool raiseErrorIfNotFound)
 					 errmsg("prepared transaction belongs to another database"),
 					 errhint("Connect to the database where the transaction was prepared to finish it.")));
 
+			hit_gxact = gxact;
+			break;
+		}
+	}
+
+	if (hit_gxact)
+	{
 		/* OK for me to lock it */
 		/* we *must* have it locked with a valid xid here! */
 		Assert(MyBackendId != InvalidBackendId);
-		gxact->locking_backend = MyBackendId;
-		MyLockedGxact = gxact;
+		hit_gxact->locking_backend = MyBackendId;
+		MyLockedGxact = hit_gxact;
 
 		LWLockRelease(TwoPhaseStateLock);
-
-		return gxact;
+		return hit_gxact;
 	}
 
 	LWLockRelease(TwoPhaseStateLock);
@@ -668,24 +688,39 @@ LockGXact(const char *gid, Oid user, bool raiseErrorIfNotFound)
 static void
 RemoveGXact(GlobalTransaction gxact)
 {
-	int			i;
+	int			i, hit_no;
 
 	Assert(LWLockHeldByMeInMode(TwoPhaseStateLock, LW_EXCLUSIVE));
 
-	for (i = 0; i < TwoPhaseState->numPrepXacts; i++)
+	if (CachedGxact != NULL && CachedGxact == gxact)
+		hit_no = CachedGxact->prep_xacts_no;
+	else
 	{
-		if (gxact == TwoPhaseState->prepXacts[i])
+		hit_no = -1;
+		for (i = 0; i < TwoPhaseState->numPrepXacts; i++)
 		{
-			/* remove from the active array */
-			TwoPhaseState->numPrepXacts--;
-			TwoPhaseState->prepXacts[i] = TwoPhaseState->prepXacts[TwoPhaseState->numPrepXacts];
-
-			/* and put it back in the freelist */
-			gxact->next = TwoPhaseState->freeGXacts;
-			TwoPhaseState->freeGXacts = gxact;
-
-			return;
+			if (gxact == TwoPhaseState->prepXacts[i])
+			{
+				hit_no = i;
+				break;
+			}
 		}
+	}
+
+	if (hit_no >= 0)
+	{
+		/* remove from the active array */
+		TwoPhaseState->numPrepXacts--;
+		TwoPhaseState->prepXacts[hit_no] = TwoPhaseState->prepXacts[TwoPhaseState->numPrepXacts];
+		TwoPhaseState->prepXacts[TwoPhaseState->numPrepXacts]->prep_xacts_no = hit_no;
+
+		/* and put it back in the freelist */
+		gxact->next = TwoPhaseState->freeGXacts;
+		TwoPhaseState->freeGXacts = gxact;
+
+		CachedGxact = NULL;
+
+		return;
 	}
 
 	elog(ERROR, "failed to find %p in GlobalTransaction array", gxact);
@@ -845,6 +880,7 @@ TwoPhaseGetGXact(TransactionId xid, bool lock_held)
 {
 	GlobalTransaction result = NULL;
 	int			i;
+	PGXACT	   *pgxact;
 
 	static TransactionId cached_xid = InvalidTransactionId;
 	static GlobalTransaction cached_gxact = NULL;
@@ -855,22 +891,32 @@ TwoPhaseGetGXact(TransactionId xid, bool lock_held)
 	 * During a recovery, COMMIT PREPARED, or ABORT PREPARED, we'll be called
 	 * repeatedly for the same XID.  We can save work with a simple cache.
 	 */
+	/* probably not that useful during recovery. remove it? */
 	if (xid == cached_xid)
 		return cached_gxact;
 
 	if (!lock_held)
 		LWLockAcquire(TwoPhaseStateLock, LW_SHARED);
 
+	if (CachedGxact)
+	{
+		pgxact = &ProcGlobal->allPgXact[CachedGxact->pgprocno];
+		if (pgxact->xid == xid)
+			result = CachedGxact;
+	}
+	else
+	{
 	for (i = 0; i < TwoPhaseState->numPrepXacts; i++)
 	{
 		GlobalTransaction gxact = TwoPhaseState->prepXacts[i];
-		PGXACT	   *pgxact = &ProcGlobal->allPgXact[gxact->pgprocno];
 
+		pgxact = &ProcGlobal->allPgXact[gxact->pgprocno];
 		if (pgxact->xid == xid)
 		{
 			result = gxact;
 			break;
 		}
+	}
 	}
 
 	if (!lock_held)
