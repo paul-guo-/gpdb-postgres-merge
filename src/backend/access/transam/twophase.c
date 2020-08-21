@@ -180,6 +180,7 @@ typedef struct GlobalTransactionData
 	bool		inredo;			/* true if entry was added via xlog_redo */
 	char		gid[GIDSIZE];	/* The GID assigned to the prepared xact */
 	int			prep_xacts_no;	/* position in the prepXacts array */
+	char		*cached_buf;	/* local pointer for prepared xlog */
 }			GlobalTransactionData;
 
 /*
@@ -1159,6 +1160,7 @@ EndPrepare(GlobalTransaction gxact)
 	TwoPhaseFileHeader *hdr;
 	StateFileChunk *record;
 	bool		replorigin;
+	int			pos;
 
 	/* Add the end sentinel to the list of 2PC records */
 	RegisterTwoPhaseRecord(TWOPHASE_RM_END_ID, 0,
@@ -1216,8 +1218,14 @@ EndPrepare(GlobalTransaction gxact)
 	MyPgXact->delayChkpt = true;
 
 	XLogBeginInsert();
+	gxact->cached_buf = MemoryContextAlloc(TopMemoryContext, records.total_len); // todo: actually can keep the memory until process exit.
+	pos = 0;
 	for (record = records.head; record != NULL; record = record->next)
+	{
+		memcpy(gxact->cached_buf + pos, record->data, record->len);
+		pos += record->len;
 		XLogRegisterData(record->data, record->len);
+	}
 
 	XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
 
@@ -1625,7 +1633,9 @@ FinishPreparedTransaction(const char *gid, bool isCommit, bool raiseErrorIfNotFo
 	 * in WAL files if the LSN is after the last checkpoint record, or moved
 	 * to disk if for some reason they have lived for a long time.
 	 */
-	if (gxact->ondisk)
+	if (CachedGxact)
+		buf = CachedGxact->cached_buf;
+	else if (gxact->ondisk)
 		buf = ReadTwoPhaseFile(xid, false);
 	else
 		XlogReadTwoPhaseData(gxact->prepare_start_lsn, &buf, NULL);
@@ -1778,6 +1788,8 @@ FinishPreparedTransaction(const char *gid, bool isCommit, bool raiseErrorIfNotFo
 	RESUME_INTERRUPTS();
 
 	pfree(buf);
+	if (CachedGxact)
+		CachedGxact->cached_buf = NULL;
 
 	return true;
 }
