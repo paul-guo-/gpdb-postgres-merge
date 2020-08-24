@@ -6692,6 +6692,150 @@ xactGetCommittedChildren(TransactionId **ptr)
 	return s->nChildXids;
 }
 
+/*
+ * Log the commit record for a plain or twophase transaction commit.
+ *
+ * A 2pc commit will be emitted when twophase_xid is valid, a plain one
+ * otherwise.
+ */
+XLogRecPtr
+XactLogCommitRecordPrepared(TimestampTz commit_time,
+					Oid tablespace_oid_to_delete_on_commit,
+					int nsubxacts, TransactionId *subxacts,
+					int nrels, RelFileNodePendingDelete *rels,
+					int nmsgs, SharedInvalidationMessage *msgs,
+					int ndeldbs, DbDirNode *deldbs,
+					bool relcacheInval, bool forceSync,
+					int xactflags, TransactionId twophase_xid,
+					const char *twophase_gid)
+
+{
+	xl_xact_commit_prepared xlrec;
+	xl_xact_xinfo xl_xinfo;
+	xl_xact_dbinfo xl_dbinfo;
+	xl_xact_subxacts xl_subxacts;
+	xl_xact_relfilenodes xl_relfilenodes;
+	xl_xact_invals xl_invals;
+	xl_xact_twophase xl_twophase;
+	xl_xact_origin xl_origin;
+	xl_xact_distrib xl_distrib;
+	xl_xact_deldbs xl_deldbs;
+	XLogRecPtr recptr;
+	bool isDtxPrepared = isPreparedDtxTransaction();
+
+	uint8		info;
+
+	Assert(CritSectionCount > 0);
+
+	xl_xinfo.xinfo = 0;
+
+	/* decide between a plain and 2pc commit */
+	if (isDtxPrepared)
+		info = XLOG_XACT_DISTRIBUTED_COMMIT;
+	else
+		info = XLOG_XACT_COMMIT_PREPARED;
+
+	/* First figure out and collect all the information needed */
+
+	xlrec.xact_time = commit_time;
+
+	if (relcacheInval)
+		xl_xinfo.xinfo |= XACT_COMPLETION_UPDATE_RELCACHE_FILE;
+	if (forceSyncCommit)
+		xl_xinfo.xinfo |= XACT_COMPLETION_FORCE_SYNC_COMMIT;
+	if ((xactflags & XACT_FLAGS_ACQUIREDACCESSEXCLUSIVELOCK))
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_AE_LOCKS;
+
+	/*
+	 * Check if the caller would like to ask standbys for immediate feedback
+	 * once this commit is applied.
+	 */
+	if (synchronous_commit >= SYNCHRONOUS_COMMIT_REMOTE_APPLY)
+		xl_xinfo.xinfo |= XACT_COMPLETION_APPLY_FEEDBACK;
+
+	/*
+	 * Relcache invalidations requires information about the current database
+	 * and so does logical decoding.
+	 */
+	if (nmsgs > 0 || XLogLogicalInfoActive())
+	{
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_DBINFO;
+		xl_dbinfo.dbId = MyDatabaseId;
+		xl_dbinfo.tsId = MyDatabaseTableSpace;
+	}
+
+	if (nsubxacts > 0)
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_SUBXACTS;
+
+	if (nrels > 0)
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_RELFILENODES;
+
+	if (nmsgs > 0)
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_INVALS;
+
+	if (ndeldbs > 0)
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_DELDBS;
+
+	xl_xinfo.xinfo |= XACT_XINFO_HAS_TWOPHASE;
+	xl_twophase.xid = twophase_xid;
+	Assert(twophase_gid != NULL);
+
+	if (XLogLogicalInfoActive())
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_GID;
+
+	/* dump transaction origin information */
+	if (replorigin_session_origin != InvalidRepOriginId)
+	{
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_ORIGIN;
+
+		xl_origin.origin_lsn = replorigin_session_origin_lsn;
+		xl_origin.origin_timestamp = replorigin_session_origin_timestamp;
+	}
+
+	if (isDtxPrepared)
+	{
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_DISTRIB;
+		xl_distrib.distrib_timestamp = getDistributedTransactionTimestamp();
+		xl_distrib.distrib_xid = getDistributedTransactionId();
+	}
+
+	if (xl_xinfo.xinfo != 0)
+		info |= XLOG_XACT_HAS_INFO;
+
+	/* Then include all the collected data into the commit record. */
+
+	XLogBeginInsert();
+
+	XLogRegisterData((char *) (&xlrec), sizeof(xl_xact_commit));
+
+	if (xl_xinfo.xinfo != 0)
+		XLogRegisterData((char *) (&xl_xinfo.xinfo), sizeof(xl_xinfo.xinfo));
+
+	if (xl_xinfo.xinfo & XACT_XINFO_HAS_DBINFO)
+		XLogRegisterData((char *) (&xl_dbinfo), sizeof(xl_dbinfo));
+
+	XLogRegisterData((char *) (&xl_twophase), sizeof(xl_xact_twophase));
+	XLogRegisterData(unconstify(char *, twophase_gid), strlen(twophase_gid) + 1);
+
+	if (xl_xinfo.xinfo & XACT_XINFO_HAS_ORIGIN)
+		XLogRegisterData((char *) (&xl_origin), sizeof(xl_xact_origin));
+
+	if (xl_xinfo.xinfo & XACT_XINFO_HAS_DISTRIB)
+		XLogRegisterData((char *) (&xl_distrib), sizeof(xl_xact_distrib));
+
+	/* we allow filtering by xacts */
+	XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
+
+	if (isDtxPrepared)
+		insertingDistributedCommitted();
+
+	recptr = XLogInsert(RM_XACT_ID, info);
+
+	if (isDtxPrepared)
+		insertedDistributedCommitted();
+
+	return recptr;
+}
 
 /*
  * Log the commit record for a plain or twophase transaction commit.
@@ -7394,12 +7538,17 @@ xact_redo(XLogReaderState *record)
 	}
 	else if (info == XLOG_XACT_PREPARE)
 	{
+		char *buf;
+
 		/*
 		 * Store xid and start/end pointers of the WAL record in TwoPhaseState
 		 * gxact entry.
 		 */
 		LWLockAcquire(TwoPhaseStateLock, LW_EXCLUSIVE);
-		PrepareRedoAdd(XLogRecGetData(record),
+
+		buf = MemoryContextAlloc(TopMemoryContext, record->EndRecPtr - record->ReadRecPtr);
+		memcpy(buf, XLogRecGetData(record), record->EndRecPtr - record->ReadRecPtr);
+		PrepareRedoAdd(buf,
 					   record->ReadRecPtr,
 					   record->EndRecPtr,
 					   XLogRecGetOrigin(record));

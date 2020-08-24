@@ -2011,6 +2011,7 @@ restoreTwoPhaseData(void)
 {
 	DIR		   *cldir;
 	struct dirent *clde;
+	MemoryContext old_context;
 
 	LWLockAcquire(TwoPhaseStateLock, LW_EXCLUSIVE);
 	cldir = AllocateDir(TWOPHASE_DIR);
@@ -2024,8 +2025,10 @@ restoreTwoPhaseData(void)
 
 			xid = (TransactionId) strtoul(clde->d_name, NULL, 16);
 
+			old_context = MemoryContextSwitchTo(TopMemoryContext);
 			buf = ProcessTwoPhaseBuffer(xid, InvalidXLogRecPtr,
 										true, false, false);
+			MemoryContetSwitchTo(old_context);
 			if (buf == NULL)
 				continue;
 
@@ -2470,7 +2473,7 @@ RecordTransactionCommitPrepared(TransactionId xid,
 	 * potentially having AccessExclusiveLocks since we don't know whether or
 	 * not they do.
 	 */
-	recptr = XactLogCommitRecord(committs,
+	recptr = XactLogCommitRecordPrepared(committs,
 								 GetPendingTablespaceForDeletionForCommit(),
 								 nchildren, children, nrels, rels,
 								 ninvalmsgs, invalmsgs,
@@ -2653,6 +2656,7 @@ PrepareRedoAdd(char *buf, XLogRecPtr start_lsn,
 	gxact->valid = false;
 	gxact->ondisk = XLogRecPtrIsInvalid(start_lsn);
 	gxact->inredo = true;		/* yes, added in redo */
+	gxact->cached_buf = buf;
 	strcpy(gxact->gid, gid);
 
 	/* And insert it into the active array */
@@ -2712,6 +2716,8 @@ PrepareRedoRemove(TransactionId xid, bool giveWarning)
 	elog(DEBUG2, "removing 2PC data for transaction %u", xid);
 	if (gxact->ondisk)
 		RemoveTwoPhaseFile(xid, giveWarning);
+	pfree(gxact->cached_buf);
+	gxact->cached_buf = NULL;
 	RemoveGXact(gxact);
 
 	return;
